@@ -128,7 +128,7 @@ def index_page() -> str:
           <div>
             <p class="eyebrow">MVP</p>
             <h1>Word -> Bitrix HTML</h1>
-            <p class="lead">Загрузите .doc или .docx. Инструмент удалит красные/зачеркнутые фрагменты, оставит желтые добавления и подготовит HTML для поля DETAIL_TEXT в Bitrix Learning.</p>
+            <p class="lead">Загрузите .doc или .docx. Инструмент удалит фрагменты с красной заливкой, оставит желтые добавления и подготовит HTML для поля DETAIL_TEXT в Bitrix Learning.</p>
           </div>
           <form class="upload" method="post" action="/convert" enctype="multipart/form-data">
             <label>Word-файл</label>

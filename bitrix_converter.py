@@ -531,16 +531,12 @@ def run_is_delete_marker(run: ET.Element) -> bool:
     if highlight and is_color_match(highlight_to_css(highlight), DELETE_COLORS):
         return True
 
-    color = child_attr(props, "color", "val")
-    if color and is_color_match(f"#{color}", DELETE_COLORS):
-        return True
-
     shading = props.find(w_tag("shd"))
     fill = shading.attrib.get(w_tag("fill")) if shading is not None else None
     if fill and is_color_match(f"#{fill}", DELETE_COLORS):
         return True
 
-    return props.find(w_tag("strike")) is not None or props.find(w_tag("dstrike")) is not None
+    return False
 
 
 def cell_attrs(cell: dict[str, object]) -> dict[str, str]:
@@ -674,7 +670,7 @@ def clean_for_bitrix(raw_html: str, converter_name: str = "unknown") -> tuple[st
         report["stats"]["output_orphan_table_tags"] = output_table_issues["orphan_table_tags"]
 
     if not report["removed_fragments"]:
-        report["warnings"].append("Красные/зачеркнутые фрагменты не найдены.")
+        report["warnings"].append("Фрагменты с красной заливкой не найдены.")
     if not report["added_fragments"]:
         report["warnings"].append("Желтые фрагменты не найдены.")
 
@@ -757,13 +753,9 @@ def effective_props(node: Node, css_rules: dict[str, dict[str, str]]) -> dict[st
 
 
 def classify_props(props: dict[str, str]) -> str | None:
-    color = props.get("color", "")
     background = props.get("background-color", "") or props.get("background", "")
-    decoration = props.get("text-decoration", "")
 
-    if any(is_color_match(value, DELETE_COLORS) for value in (color, background)):
-        return "delete"
-    if "line-through" in decoration:
+    if is_color_match(background, DELETE_COLORS):
         return "delete"
     if is_color_match(background, ADD_COLORS):
         return "add"
@@ -812,14 +804,12 @@ def normalize_attrs(node: Node, props: dict[str, str], marker: str | None) -> di
 
 def filtered_style(tag: str, props: dict[str, str], marker: str | None) -> str:
     allowed = []
-    base_keys = ["text-align", "color", "font-weight", "font-style", "border", "border-collapse"]
+    base_keys = ["text-align", "color", "font-weight", "font-style", "text-decoration", "border", "border-collapse"]
     table_keys = ["width", "min-width", "height", "min-height", "padding", "vertical-align"]
     keys = base_keys + (table_keys if tag in {"table", "td", "th"} else [])
     for key in keys:
         value = props.get(key)
         if not value:
-            continue
-        if key == "color" and is_color_match(value, DELETE_COLORS):
             continue
         allowed.append((key, value))
 
