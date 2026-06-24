@@ -57,7 +57,7 @@ class TreeParser(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         node = Node(tag.lower(), {name.lower(): value or "" for name, value in attrs})
         self.stack[-1].children.append(node)
-        if tag.lower() not in {"br", "hr", "img", "meta", "link", "input"}:
+        if tag.lower() not in {"br", "hr", "img", "meta", "link", "input", "col"}:
             self.stack.append(node)
 
     def handle_endtag(self, tag: str) -> None:
@@ -396,6 +396,7 @@ def render_docx_run(run: ET.Element) -> str:
 
 def render_docx_table(table: ET.Element, context: DocxContext) -> str:
     rows, removed_fragments = build_table_rows(table)
+    colgroup = render_table_colgroup(table, rows)
     rendered_rows = []
     for row in rows:
         cells = []
@@ -413,8 +414,97 @@ def render_docx_table(table: ET.Element, context: DocxContext) -> str:
         f"<span style=\"background-color: #ff0000\">{html.escape(fragment)}</span>"
         for fragment in removed_fragments
     )
-    table_html = '<table class="valignTop" cellspacing="1" cellpadding="1" border="1"><tbody>' + "".join(rendered_rows) + "</tbody></table>"
+    table_attrs = {
+        "cellspacing": "1",
+        "cellpadding": "1",
+        "border": "1",
+        "width": "100%",
+        "style": "table-layout: fixed",
+    }
+    table_html = f"<table{render_attrs(table_attrs)}>" + colgroup + "<tbody>" + "".join(rendered_rows) + "</tbody></table>"
     return deleted_report_markers + table_html
+
+
+def render_table_colgroup(table: ET.Element, rows: list[list[dict[str, object]]]) -> str:
+    widths = table_grid_widths(table) or inferred_table_widths(rows)
+    widths = normalize_table_widths(widths, rows)
+    if not widths:
+        return ""
+
+    total = sum(widths)
+    if total <= 0:
+        return ""
+
+    columns = "".join(f'<col width="{format_percent(width / total * 100)}%">' for width in widths)
+    return f"<colgroup>{columns}</colgroup>"
+
+
+def table_grid_widths(table: ET.Element) -> list[int]:
+    grid = table.find(w_tag("tblGrid"))
+    if grid is None:
+        return []
+
+    widths = []
+    for column in grid.findall(w_tag("gridCol")):
+        width = column.attrib.get(w_tag("w"))
+        if width and width.isdigit():
+            widths.append(int(width))
+    return widths
+
+
+def normalize_table_widths(widths: list[int | float], rows: list[list[dict[str, object]]]) -> list[float]:
+    total = sum(widths)
+    if total <= 0:
+        return [float(width) for width in widths]
+
+    normalized = [float(width) for width in widths]
+    for index, width in enumerate(widths):
+        if width / total >= 0.02:
+            continue
+        if column_has_single_cell_content(rows, index):
+            continue
+        normalized[index] = 0.0
+    return normalized
+
+
+def column_has_single_cell_content(rows: list[list[dict[str, object]]], column_index: int) -> bool:
+    for row in rows:
+        for cell in row:
+            if cell["skip"]:
+                continue
+            if int(cell["col"]) == column_index and int(cell["grid_span"]) == 1 and cell["visible_after_delete"]:
+                return True
+    return False
+
+
+def inferred_table_widths(rows: list[list[dict[str, object]]]) -> list[float]:
+    columns_count = 0
+    for row in rows:
+        for cell in row:
+            columns_count = max(columns_count, int(cell["col"]) + int(cell["grid_span"]))
+    if columns_count == 0:
+        return []
+
+    widths = [0.0] * columns_count
+    for row in rows:
+        for cell in row:
+            element = cell["element"]
+            assert isinstance(element, ET.Element)
+            width = child_attr(element.find(w_tag("tcPr")), "tcW", "w")
+            if not width or not width.isdigit():
+                continue
+            span = int(cell["grid_span"])
+            share = int(width) / span
+            for index in range(int(cell["col"]), int(cell["col"]) + span):
+                widths[index] = max(widths[index], share)
+
+    if not any(widths):
+        return [1.0] * columns_count
+    return [width or 1.0 for width in widths]
+
+
+def format_percent(value: float) -> str:
+    return f"{value:.4f}".rstrip("0").rstrip(".")
 
 
 def build_table_rows(table: ET.Element) -> tuple[list[list[dict[str, object]]], list[str]]:
@@ -543,23 +633,34 @@ def cell_attrs(cell: dict[str, object]) -> dict[str, str]:
     element = cell["element"]
     assert isinstance(element, ET.Element)
     props = element.find(w_tag("tcPr"))
-    attrs = {"valign": "top", "style": "border: 1px solid #bfbfbf; padding: 4px"}
+    attrs = {"valign": "middle"}
     if int(cell["grid_span"]) > 1:
         attrs["colspan"] = str(cell["grid_span"])
     if int(cell["rowspan"]) > 1:
         attrs["rowspan"] = str(cell["rowspan"])
     if props is not None:
-        width = child_attr(props, "tcW", "w")
-        if width and width.isdigit():
-            attrs["width"] = str(max(1, int(int(width) / 15)))
         valign = child_attr(props, "vAlign", "val")
         if valign:
             attrs["valign"] = map_vertical_align(valign)
         shading = props.find(w_tag("shd"))
         fill = shading.attrib.get(w_tag("fill")) if shading is not None else None
         if fill and fill.lower() not in {"auto", "ffffff"}:
-            attrs["style"] += f"; background-color: #{fill}"
+            attrs["style"] = f"background-color: #{fill}"
+    attrs["style"] = cell_style(attrs["valign"], attrs.get("style"))
     return attrs
+
+
+def cell_style(valign: str, extra_style: str | None = None) -> str:
+    styles = [
+        "border: 1px solid #bfbfbf",
+        "padding: 4px",
+        f"vertical-align: {valign}",
+        "overflow-wrap: anywhere",
+        "word-break: break-word",
+    ]
+    if extra_style:
+        styles.append(extra_style)
+    return "; ".join(styles)
 
 
 def render_docx_cell(cell: ET.Element, context: DocxContext) -> str:
@@ -652,6 +753,8 @@ def clean_for_bitrix(raw_html: str, converter_name: str = "unknown") -> tuple[st
     fragment = "".join(render_node(child) for child in cleaned.children)
     fragment = normalize_fragment(fragment)
     fragment = format_html_fragment(fragment)
+    table_warnings = suspicious_table_warnings(fragment)
+    report["warnings"].extend(table_warnings)
 
     report["stats"] = {
         "removed_count": len(report["removed_fragments"]),
@@ -659,6 +762,7 @@ def clean_for_bitrix(raw_html: str, converter_name: str = "unknown") -> tuple[st
         "html_length": len(fragment),
         "tables_count": fragment.lower().count("<table"),
         "raw_table_unmatched_closing_tags": raw_table_issues["unmatched_closing"],
+        "table_warnings_count": len(table_warnings),
     }
 
     output_table_issues = table_integrity_issues(fragment)
@@ -771,13 +875,12 @@ def normalize_attrs(node: Node, props: dict[str, str], marker: str | None) -> di
     attrs = {key: value for key, value in node.attrs.items() if key not in {"style", "class"}}
 
     if node.tag == "table":
-        attrs.setdefault("class", "valignTop")
         attrs.setdefault("cellspacing", "1")
         attrs.setdefault("cellpadding", "1")
         attrs.setdefault("border", "1")
 
     if node.tag in {"td", "th"}:
-        attrs.setdefault("valign", "top")
+        attrs.setdefault("valign", "middle")
         if "colspan" in node.attrs:
             attrs["colspan"] = node.attrs["colspan"]
         if "rowspan" in node.attrs:
@@ -805,8 +908,8 @@ def normalize_attrs(node: Node, props: dict[str, str], marker: str | None) -> di
 def filtered_style(tag: str, props: dict[str, str], marker: str | None) -> str:
     allowed = []
     base_keys = ["text-align", "color", "font-weight", "font-style", "text-decoration", "border", "border-collapse"]
-    table_keys = ["width", "min-width", "height", "min-height", "padding", "vertical-align"]
-    keys = base_keys + (table_keys if tag in {"table", "td", "th"} else [])
+    table_keys = ["width", "min-width", "height", "min-height", "padding", "vertical-align", "table-layout", "overflow-wrap", "word-break"]
+    keys = base_keys + (table_keys if tag in {"table", "td", "th", "col"} else [])
     for key in keys:
         value = props.get(key)
         if not value:
@@ -824,6 +927,136 @@ def filtered_style(tag: str, props: dict[str, str], marker: str | None) -> str:
             allowed.append(("background-color", background))
 
     return "; ".join(f"{key}: {value}" for key, value in allowed)
+
+
+def suspicious_table_warnings(fragment: str) -> list[str]:
+    parser = TreeParser()
+    parser.feed(fragment)
+
+    empty_colspan_count = 0
+    date_rowspan_examples: list[str] = []
+    date_followed_by_empty_examples: list[str] = []
+    for table in iter_nodes(parser.root, "table"):
+        rows = direct_children(table, "tr")
+        for row_index, row in enumerate(rows):
+            cells = [child for child in row.children if child.tag in {"td", "th"}]
+            if len(cells) <= 1:
+                continue
+
+            for cell in cells:
+                colspan = int_attr(cell, "colspan", 1)
+                rowspan = int_attr(cell, "rowspan", 1)
+                text = compact_text(cell.text_content())
+                if colspan > 1 and not text:
+                    empty_colspan_count += 1
+                if rowspan > 1 and date_like_text(text):
+                    context = action_number_summary(rows[row_index:row_index + rowspan])
+                    date_rowspan_examples.append(f"{text} на {rowspan} строк{context}")
+
+        date_followed_by_empty_examples.extend(date_cells_followed_by_empty_rows(rows))
+
+    warnings = []
+    if empty_colspan_count:
+        warnings.append(
+            "В таблицах найдены пустые объединенные ячейки внутри строк: "
+            f"{empty_colspan_count}. Конвертер сохраняет их как в Word, но это может быть ошибкой исходного файла: "
+            "если по смыслу там должны быть отдельные пустые ячейки, поправьте Word у инициатора."
+        )
+    if date_rowspan_examples:
+        examples = "; ".join(date_rowspan_examples[:3])
+        warnings.append(
+            "В таблицах найдены ячейки с датой, растянутые на несколько строк: "
+            f"{examples}. Конвертер сохраняет объединение как в Word, но проверьте, должна ли дата быть указана отдельно для каждой акции."
+        )
+    if date_followed_by_empty_examples:
+        examples = "; ".join(date_followed_by_empty_examples[:3])
+        warnings.append(
+            "В таблицах найдены даты, после которых в том же столбце идут пустые ячейки: "
+            f"{examples}. Конвертер сохраняет структуру Word, но проверьте у инициатора, относится ли дата к этим строкам или должна быть проставлена отдельно."
+        )
+    return warnings
+
+
+def date_cells_followed_by_empty_rows(rows: list[Node]) -> list[str]:
+    examples = []
+    for index, row in enumerate(rows):
+        cells = [child for child in row.children if child.tag in {"td", "th"}]
+        if len(cells) <= 1:
+            continue
+
+        date_cell = cells[-1]
+        date_text = compact_text(date_cell.text_content())
+        if int_attr(date_cell, "rowspan", 1) > 1 or not date_like_text(date_text):
+            continue
+
+        empty_count = 0
+        empty_rows = []
+        for next_row in rows[index + 1:]:
+            next_cells = [child for child in next_row.children if child.tag in {"td", "th"}]
+            if len(next_cells) <= 1:
+                break
+            next_date_text = compact_text(next_cells[-1].text_content())
+            next_main_text = compact_text(" ".join(cell.text_content() for cell in next_cells[:-1]))
+            if not next_main_text:
+                break
+            if not next_date_text:
+                empty_count += 1
+                empty_rows.append(next_row)
+                continue
+            break
+
+        if empty_count >= 2:
+            context = action_number_summary(empty_rows)
+            examples.append(f"{date_text}, затем {empty_count} пустые строки{context}")
+    return examples
+
+
+def action_number_summary(rows: list[Node]) -> str:
+    numbers = []
+    seen = set()
+    for row in rows:
+        for number in re.findall(r"\b\d{6,8}\b", compact_text(row.text_content())):
+            if number in seen:
+                continue
+            seen.add(number)
+            numbers.append(number)
+
+    if not numbers:
+        return ""
+    if len(numbers) == 1:
+        return f" (номер {numbers[0]})"
+    return f" (номера {numbers[0]}...{numbers[-1]})"
+
+
+def iter_nodes(node: Node, tag: str) -> Iterable[Node]:
+    if node.tag == tag:
+        yield node
+    for child in node.children:
+        yield from iter_nodes(child, tag)
+
+
+def direct_children(node: Node, tag: str) -> list[Node]:
+    result = []
+    for child in node.children:
+        if child.tag == tag:
+            result.append(child)
+        elif child.tag in {"tbody", "thead", "tfoot"}:
+            result.extend(direct_children(child, tag))
+    return result
+
+
+def int_attr(node: Node, name: str, default: int) -> int:
+    try:
+        return int(node.attrs.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+def date_like_text(text: str) -> bool:
+    text = compact_text(text)
+    if len(text) > 80:
+        return False
+    return bool(re.search(r"\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b", text)) or text.lower().startswith("до ")
 
 
 def table_integrity_issues(fragment: str) -> dict[str, int]:
@@ -889,7 +1122,7 @@ def normalize_fragment(fragment: str) -> str:
     return fragment.strip()
 
 
-VOID_TAGS = {"br", "hr", "img", "meta", "link", "input"}
+VOID_TAGS = {"br", "hr", "img", "meta", "link", "input", "col"}
 INLINE_TAGS = {"a", "span", "b", "strong", "i", "em", "u", "font", "small", "sub", "sup"}
 ONE_LINE_TAGS = INLINE_TAGS | {"p", "button"}
 

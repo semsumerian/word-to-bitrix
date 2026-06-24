@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import argparse
 import html
 import json
 import mimetypes
 import re
+import sys
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -93,6 +95,10 @@ class App(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         print(f"{self.address_string()} - {format % args}")
+
+
+class ReusableThreadingHTTPServer(ThreadingHTTPServer):
+    allow_reuse_address = True
 
 
 def handle_upload(filename: str, content: bytes) -> dict[str, object]:
@@ -238,8 +244,10 @@ def preview_document(fragment: str) -> str:
     <!doctype html>
     <html><head><meta charset="utf-8"><style>
     body {{ font-family: Arial, sans-serif; color: #1f2933; padding: 24px; line-height: 1.45; }}
-    table {{ border-collapse: collapse; width: 100%; margin: 12px 0; }}
-    td, th {{ border: 1px solid #bfbfbf; padding: 6px; vertical-align: top; }}
+    table {{ border-collapse: collapse; width: 100%; margin: 12px 0; table-layout: fixed; }}
+    td, th {{ border: 1px solid #bfbfbf; padding: 6px; overflow-wrap: anywhere; word-break: break-word; }}
+    td p, th p {{ margin: 0 0 6px; }}
+    td p:last-child, th p:last-child {{ margin-bottom: 0; }}
     .hide {{ display: none; }}
     .js-fancyMyText {{ border: 2px solid #ff0000; padding: 8px; margin: 8px 0; }}
     .js-fancyLink, button {{ cursor: pointer; }}
@@ -305,10 +313,23 @@ def styles() -> str:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Run Word -> Bitrix HTML web UI.")
+    parser.add_argument("--host", default="127.0.0.1", help="Host to bind. Default: 127.0.0.1")
+    parser.add_argument("--port", type=int, default=8080, help="Port to bind. Default: 8080")
+    args = parser.parse_args()
+
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    server = ThreadingHTTPServer(("127.0.0.1", 8080), App)
-    print("Word -> Bitrix HTML: http://127.0.0.1:8080")
+    try:
+        server = ReusableThreadingHTTPServer((args.host, args.port), App)
+    except OSError as exc:
+        if exc.errno == 48:
+            print(f"Port {args.port} is already in use. Open http://{args.host}:{args.port} if the server is already running, or start another port:")
+            print(f"python3 server.py --port {args.port + 1}")
+            sys.exit(1)
+        raise
+
+    print(f"Word -> Bitrix HTML: http://{args.host}:{args.port}")
     server.serve_forever()
 
 
