@@ -17,6 +17,7 @@ import xml.etree.ElementTree as ET
 
 DELETE_COLORS = {"#ff0000", "#c00000", "red"}
 ADD_COLORS = {"#ffff00", "#fff6c6", "#00ff00", "yellow", "green"}
+DEFAULT_TEXT_COLORS = {"#000", "#000000", "#333333", "black", "rgb(0,0,0)", "rgb(51,51,51)"}
 ALLOWED_EXTENSIONS = {".doc", ".docx", ".rtf"}
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -896,6 +897,7 @@ def clean_for_bitrix(raw_html: str, converter_name: str = "unknown") -> tuple[st
         )
 
     cleaned = transform_node(body, css_rules, report)
+    cleaned = simplify_html_tree(cleaned)
     fragment = "".join(render_node(child) for child in cleaned.children)
     fragment = normalize_fragment(fragment)
     fragment = format_html_fragment(fragment)
@@ -994,6 +996,68 @@ def transform_node(node: Node, css_rules: dict[str, dict[str, str]], report: dic
     return new_node
 
 
+def simplify_html_tree(root: Node) -> Node:
+    root.children = simplify_children(root.children)
+    return root
+
+
+def simplify_children(children: list[Node]) -> list[Node]:
+    simplified: list[Node] = []
+    for child in children:
+        simplified.extend(simplify_node(child))
+    return merge_adjacent_nodes(simplified)
+
+
+def simplify_node(node: Node) -> list[Node]:
+    if node.is_text:
+        return [node]
+
+    tag = {"strong": "b", "em": "i"}.get(node.tag or "", node.tag)
+    new_node = Node(tag, dict(node.attrs), simplify_children(node.children))
+
+    if new_node.tag == "span" and not new_node.attrs:
+        return new_node.children
+    if new_node.tag in {"b", "i", "u"} and only_line_breaks(new_node):
+        return new_node.children
+    if new_node.tag in INLINE_TAGS and not compact_text(new_node.text_content()) and not contains_tag(new_node, {"br", "img", "table"}):
+        return []
+
+    return [new_node]
+
+
+def merge_adjacent_nodes(nodes: list[Node]) -> list[Node]:
+    merged: list[Node] = []
+    for node in nodes:
+        if node.is_text:
+            if merged and merged[-1].is_text:
+                merged[-1].data += node.data
+            else:
+                merged.append(node)
+            continue
+
+        if merged and can_merge_nodes(merged[-1], node):
+            merged[-1].children.extend(node.children)
+            merged[-1].children = merge_adjacent_nodes(merged[-1].children)
+            continue
+
+        merged.append(node)
+    return merged
+
+
+def can_merge_nodes(left: Node, right: Node) -> bool:
+    return (
+        not left.is_text
+        and not right.is_text
+        and left.tag == right.tag
+        and left.attrs == right.attrs
+        and left.tag in INLINE_TAGS
+    )
+
+
+def only_line_breaks(node: Node) -> bool:
+    return all(child.tag == "br" or (child.is_text and not child.data.strip()) for child in node.children)
+
+
 def effective_props(node: Node, css_rules: dict[str, dict[str, str]]) -> dict[str, str]:
     props: dict[str, str] = {}
     for cls in node.attrs.get("class", "").split():
@@ -1060,6 +1124,8 @@ def filtered_style(tag: str, props: dict[str, str], marker: str | None) -> str:
         value = props.get(key)
         if not value:
             continue
+        if key == "color" and is_default_text_color(value):
+            continue
         allowed.append((key, value))
 
     if tag in {"td", "th"}:
@@ -1073,6 +1139,14 @@ def filtered_style(tag: str, props: dict[str, str], marker: str | None) -> str:
             allowed.append(("background-color", background))
 
     return "; ".join(f"{key}: {value}" for key, value in allowed)
+
+
+def is_default_text_color(value: str) -> bool:
+    return normalize_css_color(value) in DEFAULT_TEXT_COLORS
+
+
+def normalize_css_color(value: str) -> str:
+    return value.lower().replace(" ", "")
 
 
 def suspicious_table_warnings(fragment: str) -> list[str]:
