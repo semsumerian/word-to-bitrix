@@ -286,14 +286,14 @@ PY
 bad []
 ```
 
-Проверить, что в HTML не осталась служебная красная/желтая заливка:
+Проверить, что в HTML не осталась служебная красная/желтая/зеленая заливка:
 
 ```bash
 cd "/Users/semen/Курсы обучения/word-to-bitrix"
 python3 - <<'PY'
 from pathlib import Path
 
-markers = ['background-color: #ff0000', 'background-color: red', 'background-color: #ffff00', 'background-color: yellow']
+markers = ['background-color: #ff0000', 'background-color: red', 'background-color: #ffff00', 'background-color: #fff6c6', 'background-color: #00ff00', 'background-color: yellow', 'background-color: green']
 bad = []
 for path in Path('outputs').glob('*.html'):
     html = path.read_text(encoding='utf-8').lower()

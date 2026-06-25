@@ -16,7 +16,7 @@ import xml.etree.ElementTree as ET
 
 
 DELETE_COLORS = {"#ff0000", "#c00000", "red"}
-ADD_COLORS = {"#ffff00", "yellow"}
+ADD_COLORS = {"#ffff00", "#fff6c6", "#00ff00", "yellow", "green"}
 ALLOWED_EXTENSIONS = {".doc", ".docx", ".rtf"}
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -93,9 +93,18 @@ class NumberingLevel:
 
 
 @dataclass
+class TextStyle:
+    bold: bool | None = None
+    italic: bool | None = None
+    underline: bool | None = None
+    strike: bool | None = None
+
+
+@dataclass
 class DocxContext:
     rels: dict[str, str]
     numbering: dict[tuple[str, str], NumberingLevel]
+    styles: dict[str, TextStyle]
     counters: dict[tuple[str, str], int] = field(default_factory=dict)
 
     def next_number(self, paragraph: ET.Element) -> str | None:
@@ -225,13 +234,14 @@ def docx_to_html(docx_path: Path) -> str:
         document_xml = archive.read("word/document.xml")
         rels = read_docx_relationships(archive)
         numbering = read_docx_numbering(archive)
+        styles = read_docx_styles(archive)
 
     root = ET.fromstring(document_xml)
     body = root.find(w_tag("body"))
     if body is None:
         return ""
 
-    context = DocxContext(rels=rels, numbering=numbering)
+    context = DocxContext(rels=rels, numbering=numbering, styles=styles)
     blocks = []
     for child in body:
         rendered = render_docx_block(child, context)
@@ -300,6 +310,98 @@ def read_docx_numbering(archive: zipfile.ZipFile) -> dict[tuple[str, str], Numbe
     return result
 
 
+def text_style_from_props(props: ET.Element | None) -> TextStyle:
+    if props is None:
+        return TextStyle()
+
+    strike = merged_toggle_props(props, "strike", "dstrike")
+    return TextStyle(
+        bold=toggle_prop(props, "b"),
+        italic=toggle_prop(props, "i"),
+        underline=underline_prop(props),
+        strike=strike,
+    )
+
+
+def merge_text_styles(*styles: TextStyle | None) -> TextStyle:
+    result = TextStyle()
+    for style in styles:
+        if style is None:
+            continue
+        for name in ("bold", "italic", "underline", "strike"):
+            value = getattr(style, name)
+            if value is not None:
+                setattr(result, name, value)
+    return result
+
+
+def toggle_prop(props: ET.Element, name: str) -> bool | None:
+    child = props.find(w_tag(name))
+    if child is None:
+        return None
+    value = child.attrib.get(w_tag("val"))
+    if value is None:
+        return True
+    return value.lower() not in {"0", "false", "off"}
+
+
+def underline_prop(props: ET.Element) -> bool | None:
+    child = props.find(w_tag("u"))
+    if child is None:
+        return None
+    value = child.attrib.get(w_tag("val"))
+    if value is None:
+        return True
+    return value.lower() not in {"0", "false", "off", "none"}
+
+
+def merged_toggle_props(props: ET.Element, *names: str) -> bool | None:
+    values = [toggle_prop(props, name) for name in names]
+    if any(value is True for value in values):
+        return True
+    if any(value is False for value in values):
+        return False
+    return None
+
+
+def read_docx_styles(archive: zipfile.ZipFile) -> dict[str, TextStyle]:
+    try:
+        styles_xml = archive.read("word/styles.xml")
+    except KeyError:
+        return {}
+
+    root = ET.fromstring(styles_xml)
+    direct_styles: dict[str, TextStyle] = {}
+    based_on: dict[str, str] = {}
+    for style in root.findall(w_tag("style")):
+        style_id = style.attrib.get(w_tag("styleId"))
+        if not style_id:
+            continue
+        direct_styles[style_id] = text_style_from_props(style.find(w_tag("rPr")))
+        base_style = child_attr(style, "basedOn", "val")
+        if base_style:
+            based_on[style_id] = base_style
+
+    resolved: dict[str, TextStyle] = {}
+
+    def resolve(style_id: str, stack: set[str] | None = None) -> TextStyle:
+        if style_id in resolved:
+            return resolved[style_id]
+        stack = stack or set()
+        if style_id in stack:
+            return TextStyle()
+        stack.add(style_id)
+
+        base = resolve(based_on[style_id], stack) if style_id in based_on else TextStyle()
+        result = merge_text_styles(base, direct_styles.get(style_id))
+        resolved[style_id] = result
+        return result
+
+    for style_id in direct_styles:
+        resolve(style_id)
+    return resolved
+
+
 def render_docx_block(element: ET.Element, context: DocxContext) -> str:
     if element.tag == w_tag("p"):
         return render_docx_paragraph(element, context)
@@ -318,7 +420,9 @@ def render_docx_paragraph(paragraph: ET.Element, context: DocxContext) -> str:
             if value:
                 attrs["align"] = map_horizontal_align(value)
 
-    content = "".join(render_docx_inline(child, context) for child in paragraph)
+    paragraph_style_id = child_attr(props, "pStyle", "val") if props is not None else None
+    paragraph_style = context.styles.get(paragraph_style_id or "", TextStyle())
+    content = render_docx_children(paragraph, context, paragraph_style)
     number_label = context.next_number(paragraph)
     if number_label and compact_text(text_after_deletions(paragraph)):
         escaped_label = html.escape(number_label)
@@ -330,26 +434,57 @@ def render_docx_paragraph(paragraph: ET.Element, context: DocxContext) -> str:
     return f"<p{render_attrs(attrs)}>{content}</p>"
 
 
-def render_docx_inline(element: ET.Element, context: DocxContext) -> str:
+def render_docx_children(
+    element: ET.Element,
+    context: DocxContext,
+    base_style: TextStyle,
+    initial_carry_style: TextStyle | None = None,
+) -> str:
+    parts = []
+    carry_style = initial_carry_style or TextStyle()
+    for child in element:
+        if child.tag == w_tag("r"):
+            rendered, carry_style = render_docx_run(child, context, base_style, carry_style)
+        else:
+            rendered = render_docx_inline(child, context, base_style, carry_style)
+        if rendered:
+            parts.append(rendered)
+    return "".join(parts)
+
+
+def render_docx_inline(
+    element: ET.Element,
+    context: DocxContext,
+    base_style: TextStyle,
+    carry_style: TextStyle | None = None,
+) -> str:
     if element.tag == w_tag("r"):
-        return render_docx_run(element)
+        rendered, _ = render_docx_run(element, context, base_style, carry_style or TextStyle())
+        return rendered
     if element.tag == w_tag("hyperlink"):
         rel_id = element.attrib.get(r_tag("id"))
         anchor = element.attrib.get(w_tag("anchor"))
         href = context.rels.get(rel_id or "", f"#{anchor}" if anchor else "#")
-        content = "".join(render_docx_inline(child, context) for child in element)
+        content = render_docx_children(element, context, base_style, carry_style)
         return f"<a href={html.escape(href, quote=True)!r}>{content}</a>"
     if element.tag == w_tag("fldSimple"):
-        return "".join(render_docx_inline(child, context) for child in element)
+        return render_docx_children(element, context, base_style, carry_style)
     return ""
 
 
-def render_docx_run(run: ET.Element) -> str:
+def render_docx_run(
+    run: ET.Element,
+    context: DocxContext,
+    base_style: TextStyle,
+    carry_style: TextStyle,
+) -> tuple[str, TextStyle]:
     parts: list[str] = []
+    has_break = False
     for child in run:
         if child.tag == w_tag("t"):
             parts.append(html.escape(child.text or ""))
         elif child.tag == w_tag("br"):
+            has_break = True
             parts.append("<br>")
         elif child.tag == w_tag("tab"):
             parts.append("&nbsp;&nbsp;&nbsp;&nbsp;")
@@ -360,9 +495,16 @@ def render_docx_run(run: ET.Element) -> str:
 
     content = "".join(parts)
     if not content:
-        return ""
+        return "", carry_style
 
     props = run.find(w_tag("rPr"))
+    run_style_id = child_attr(props, "rStyle", "val") if props is not None else None
+    effective_style = merge_text_styles(
+        base_style,
+        carry_style,
+        context.styles.get(run_style_id or ""),
+        text_style_from_props(props),
+    )
     styles: list[str] = []
     if props is not None:
         color = child_attr(props, "color", "val")
@@ -378,20 +520,20 @@ def render_docx_run(run: ET.Element) -> str:
         if fill and fill.lower() not in {"auto", "ffffff"}:
             styles.append(f"background-color: #{fill}")
 
-        if props.find(w_tag("strike")) is not None or props.find(w_tag("dstrike")) is not None:
-            styles.append("text-decoration: line-through")
+    if effective_style.strike:
+        styles.append("text-decoration: line-through")
 
-        if props.find(w_tag("b")) is not None:
-            content = f"<b>{content}</b>"
-        if props.find(w_tag("i")) is not None:
-            content = f"<i>{content}</i>"
-        if props.find(w_tag("u")) is not None:
-            content = f"<u>{content}</u>"
+    if effective_style.bold:
+        content = f"<b>{content}</b>"
+    if effective_style.italic:
+        content = f"<i>{content}</i>"
+    if effective_style.underline:
+        content = f"<u>{content}</u>"
 
     if styles:
         content = f"<span style={'; '.join(styles)!r}>{content}</span>"
 
-    return content
+    return content, effective_style if has_break else carry_style
 
 
 def render_docx_table(table: ET.Element, context: DocxContext) -> str:
@@ -459,7 +601,7 @@ def normalize_table_widths(widths: list[int | float], rows: list[list[dict[str, 
 
     normalized = [float(width) for width in widths]
     for index, width in enumerate(widths):
-        if width / total >= 0.02:
+        if width / total >= 0.03:
             continue
         if column_has_single_cell_content(rows, index):
             continue
@@ -638,6 +780,8 @@ def cell_attrs(cell: dict[str, object]) -> dict[str, str]:
         attrs["colspan"] = str(cell["grid_span"])
     if int(cell["rowspan"]) > 1:
         attrs["rowspan"] = str(cell["rowspan"])
+    if date_like_text(compact_text(text_after_deletions(element))):
+        attrs["align"] = "center"
     if props is not None:
         valign = child_attr(props, "vAlign", "val")
         if valign:
@@ -646,11 +790,11 @@ def cell_attrs(cell: dict[str, object]) -> dict[str, str]:
         fill = shading.attrib.get(w_tag("fill")) if shading is not None else None
         if fill and fill.lower() not in {"auto", "ffffff"}:
             attrs["style"] = f"background-color: #{fill}"
-    attrs["style"] = cell_style(attrs["valign"], attrs.get("style"))
+    attrs["style"] = cell_style(attrs["valign"], attrs.get("style"), attrs.get("align"))
     return attrs
 
 
-def cell_style(valign: str, extra_style: str | None = None) -> str:
+def cell_style(valign: str, extra_style: str | None = None, text_align: str | None = None) -> str:
     styles = [
         "border: 1px solid #bfbfbf",
         "padding: 4px",
@@ -658,6 +802,8 @@ def cell_style(valign: str, extra_style: str | None = None) -> str:
         "overflow-wrap: anywhere",
         "word-break: break-word",
     ]
+    if text_align:
+        styles.append(f"text-align: {text_align}")
     if extra_style:
         styles.append(extra_style)
     return "; ".join(styles)
