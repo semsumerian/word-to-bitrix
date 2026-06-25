@@ -17,7 +17,18 @@ import xml.etree.ElementTree as ET
 
 DELETE_COLORS = {"#ff0000", "#c00000", "red"}
 ADD_COLORS = {"#ffff00", "#fff6c6", "#00ff00", "yellow", "green"}
-DEFAULT_TEXT_COLORS = {"#000", "#000000", "#333333", "black", "rgb(0,0,0)", "rgb(51,51,51)"}
+BLOCKED_FONT_STYLE_KEYS = {
+    "font",
+    "font-family",
+    "font-size",
+    "font-size-adjust",
+    "font-stretch",
+    "line-height",
+    "mso-style-name",
+    "mso-style-parent",
+    "mso-style-priority",
+    "mso-style-unhide",
+}
 ALLOWED_EXTENSIONS = {".doc", ".docx", ".rtf"}
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -107,6 +118,7 @@ class DocxContext:
     numbering: dict[tuple[str, str], NumberingLevel]
     styles: dict[str, TextStyle]
     counters: dict[tuple[str, str], int] = field(default_factory=dict)
+    image_counter: int = 0
 
     def next_number(self, paragraph: ET.Element) -> str | None:
         num_id, level = paragraph_numbering(paragraph)
@@ -125,6 +137,16 @@ class DocxContext:
             return None
 
         return numbering_level.text.replace(f"%{int(level) + 1}", str(current))
+
+    def next_image_tag(self, caption: str | None = None) -> str:
+        number = figure_caption_number(caption or "")
+        if number is None:
+            self.image_counter += 1
+            number = self.image_counter
+        else:
+            self.image_counter = max(self.image_counter, number)
+
+        return f'<img src="__IMAGE_{number}_URL__">'
 
 
 def convert_file(input_path: Path, output_path: Path | None = None) -> ConversionResult:
@@ -244,10 +266,48 @@ def docx_to_html(docx_path: Path) -> str:
 
     context = DocxContext(rels=rels, numbering=numbering, styles=styles)
     blocks = []
+    pending_image_paragraphs = 0
+    skip_blank_after_image_caption = False
     for child in body:
+        if child.tag == w_tag("p"):
+            paragraph_text = compact_text(text_after_deletions(child))
+            if skip_blank_after_image_caption and not paragraph_text and not paragraph_has_image(child):
+                continue
+            skip_blank_after_image_caption = False
+
+        if child.tag == w_tag("p") and paragraph_is_image_only(child):
+            remove_trailing_blank_paragraphs(blocks)
+            pending_image_paragraphs += 1
+            continue
+
+        if child.tag == w_tag("p"):
+            if pending_image_paragraphs and not paragraph_text:
+                continue
+            caption_number = figure_caption_number(paragraph_text)
+            if pending_image_paragraphs and caption_number is not None:
+                blocks.append(f"<p>{context.next_image_tag(paragraph_text)}</p>")
+                blocks.append(render_figure_caption(paragraph_text))
+                pending_image_paragraphs = 0
+                skip_blank_after_image_caption = True
+                continue
+            elif pending_image_paragraphs:
+                for _ in range(pending_image_paragraphs):
+                    blocks.append(f"<p>{context.next_image_tag()}</p>")
+                pending_image_paragraphs = 0
+        elif pending_image_paragraphs:
+            skip_blank_after_image_caption = False
+            for _ in range(pending_image_paragraphs):
+                blocks.append(f"<p>{context.next_image_tag()}</p>")
+            pending_image_paragraphs = 0
+        else:
+            skip_blank_after_image_caption = False
+
         rendered = render_docx_block(child, context)
         if rendered:
             blocks.append(rendered)
+    if pending_image_paragraphs:
+        for _ in range(pending_image_paragraphs):
+            blocks.append(f"<p>{context.next_image_tag()}</p>")
     return "\n".join(blocks).strip()
 
 
@@ -411,6 +471,32 @@ def render_docx_block(element: ET.Element, context: DocxContext) -> str:
     return ""
 
 
+def paragraph_is_image_only(paragraph: ET.Element) -> bool:
+    return paragraph_has_image(paragraph) and not compact_text(text_after_deletions(paragraph))
+
+
+def paragraph_has_image(paragraph: ET.Element) -> bool:
+    return paragraph.find(f".//{w_tag('drawing')}") is not None or paragraph.find(f".//{w_tag('pict')}") is not None
+
+
+def figure_caption_number(text: str) -> int | None:
+    match = re.match(r"рис(?:унок|\.)?\s*\.?\s*(\d+)\b", compact_text(text), flags=re.I)
+    return int(match.group(1)) if match else None
+
+
+def render_figure_caption(text: str) -> str:
+    return f"<p><i>{html.escape(compact_text(text))}</i></p>"
+
+
+def remove_trailing_blank_paragraphs(blocks: list[str]) -> None:
+    while blocks and is_blank_paragraph_html(blocks[-1]):
+        blocks.pop()
+
+
+def is_blank_paragraph_html(value: str) -> bool:
+    return bool(re.fullmatch(r"<p(?:\s[^>]*)?><br></p>", value.strip()))
+
+
 def render_docx_paragraph(paragraph: ET.Element, context: DocxContext) -> str:
     attrs: dict[str, str] = {}
     props = paragraph.find(w_tag("pPr"))
@@ -490,9 +576,9 @@ def render_docx_run(
         elif child.tag == w_tag("tab"):
             parts.append("&nbsp;&nbsp;&nbsp;&nbsp;")
         elif child.tag == w_tag("drawing"):
-            continue
+            parts.append(context.next_image_tag())
         elif child.tag == w_tag("pict"):
-            continue
+            parts.append(context.next_image_tag())
 
     content = "".join(parts)
     if not content:
@@ -897,12 +983,17 @@ def clean_for_bitrix(raw_html: str, converter_name: str = "unknown") -> tuple[st
         )
 
     cleaned = transform_node(body, css_rules, report)
-    cleaned = simplify_html_tree(cleaned)
     fragment = "".join(render_node(child) for child in cleaned.children)
     fragment = normalize_fragment(fragment)
     fragment = format_html_fragment(fragment)
     table_warnings = suspicious_table_warnings(fragment)
     report["warnings"].extend(table_warnings)
+    image_placeholder_count = image_placeholders_count(fragment)
+    if image_placeholder_count:
+        report["warnings"].append(
+            "В документе найдены изображения. В HTML вставлены шаблоны "
+            "__IMAGE_N_URL__; после загрузки картинок в Bitrix/Etalon замените их на реальные ссылки."
+        )
 
     report["stats"] = {
         "removed_count": len(report["removed_fragments"]),
@@ -911,6 +1002,7 @@ def clean_for_bitrix(raw_html: str, converter_name: str = "unknown") -> tuple[st
         "tables_count": fragment.lower().count("<table"),
         "raw_table_unmatched_closing_tags": raw_table_issues["unmatched_closing"],
         "table_warnings_count": len(table_warnings),
+        "image_placeholders_count": image_placeholder_count,
     }
 
     output_table_issues = table_integrity_issues(fragment)
@@ -948,12 +1040,19 @@ def parse_style(style: str) -> dict[str, str]:
         if ":" not in item:
             continue
         key, value = item.split(":", 1)
-        result[key.strip().lower()] = normalize_css_value(value)
+        key = key.strip().lower()
+        if is_blocked_font_style(key):
+            continue
+        result[key] = normalize_css_value(value)
     return result
 
 
 def normalize_css_value(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def is_blocked_font_style(key: str) -> bool:
+    return key in BLOCKED_FONT_STYLE_KEYS or key.startswith("mso-font-")
 
 
 def transform_node(node: Node, css_rules: dict[str, dict[str, str]], report: dict[str, object]) -> Node:
@@ -994,68 +1093,6 @@ def transform_node(node: Node, css_rules: dict[str, dict[str, str]], report: dic
 
     new_node.attrs = normalize_attrs(new_node, props, marker)
     return new_node
-
-
-def simplify_html_tree(root: Node) -> Node:
-    root.children = simplify_children(root.children)
-    return root
-
-
-def simplify_children(children: list[Node]) -> list[Node]:
-    simplified: list[Node] = []
-    for child in children:
-        simplified.extend(simplify_node(child))
-    return merge_adjacent_nodes(simplified)
-
-
-def simplify_node(node: Node) -> list[Node]:
-    if node.is_text:
-        return [node]
-
-    tag = {"strong": "b", "em": "i"}.get(node.tag or "", node.tag)
-    new_node = Node(tag, dict(node.attrs), simplify_children(node.children))
-
-    if new_node.tag == "span" and not new_node.attrs:
-        return new_node.children
-    if new_node.tag in {"b", "i", "u"} and only_line_breaks(new_node):
-        return new_node.children
-    if new_node.tag in INLINE_TAGS and not compact_text(new_node.text_content()) and not contains_tag(new_node, {"br", "img", "table"}):
-        return []
-
-    return [new_node]
-
-
-def merge_adjacent_nodes(nodes: list[Node]) -> list[Node]:
-    merged: list[Node] = []
-    for node in nodes:
-        if node.is_text:
-            if merged and merged[-1].is_text:
-                merged[-1].data += node.data
-            else:
-                merged.append(node)
-            continue
-
-        if merged and can_merge_nodes(merged[-1], node):
-            merged[-1].children.extend(node.children)
-            merged[-1].children = merge_adjacent_nodes(merged[-1].children)
-            continue
-
-        merged.append(node)
-    return merged
-
-
-def can_merge_nodes(left: Node, right: Node) -> bool:
-    return (
-        not left.is_text
-        and not right.is_text
-        and left.tag == right.tag
-        and left.attrs == right.attrs
-        and left.tag in INLINE_TAGS
-    )
-
-
-def only_line_breaks(node: Node) -> bool:
-    return all(child.tag == "br" or (child.is_text and not child.data.strip()) for child in node.children)
 
 
 def effective_props(node: Node, css_rules: dict[str, dict[str, str]]) -> dict[str, str]:
@@ -1124,8 +1161,6 @@ def filtered_style(tag: str, props: dict[str, str], marker: str | None) -> str:
         value = props.get(key)
         if not value:
             continue
-        if key == "color" and is_default_text_color(value):
-            continue
         allowed.append((key, value))
 
     if tag in {"td", "th"}:
@@ -1139,14 +1174,6 @@ def filtered_style(tag: str, props: dict[str, str], marker: str | None) -> str:
             allowed.append(("background-color", background))
 
     return "; ".join(f"{key}: {value}" for key, value in allowed)
-
-
-def is_default_text_color(value: str) -> bool:
-    return normalize_css_color(value) in DEFAULT_TEXT_COLORS
-
-
-def normalize_css_color(value: str) -> str:
-    return value.lower().replace(" ", "")
 
 
 def suspicious_table_warnings(fragment: str) -> list[str]:
@@ -1277,6 +1304,10 @@ def date_like_text(text: str) -> bool:
     if len(text) > 80:
         return False
     return bool(re.search(r"\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b", text)) or text.lower().startswith("до ")
+
+
+def image_placeholders_count(fragment: str) -> int:
+    return len(set(re.findall(r"__IMAGE_\d+_URL__", fragment)))
 
 
 def table_integrity_issues(fragment: str) -> dict[str, int]:
