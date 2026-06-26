@@ -133,8 +133,8 @@ def index_page() -> str:
         <section class="hero">
           <div class="intro">
             <p class="eyebrow">Конвертер для Bitrix</p>
-            <h1>Word в HTML для Bitrix</h1>
-            <p class="lead">Загрузите .doc или .docx. Инструмент обработает цветовые правки и подготовит HTML для вставки в Bitrix.</p>
+            <h1>Word в HTML для учебных курсов</h1>
+            <p class="lead">Загрузите .doc или .docx. Инструмент обработает цветовые правки и подготовит HTML для вставки в страницу курса.</p>
             <div class="rules" aria-label="Правила обработки">
               <div class="rule">
                 <span class="rule-dot delete"></span>
@@ -161,7 +161,7 @@ def index_page() -> str:
               <span class="file-picker-meta" id="file-name">или перетащите его сюда</span>
             </label>
             <button type="submit">Подготовить HTML</button>
-            <p class="upload-note">После обработки откроется HTML, предпросмотр и отчет по правкам.</p>
+            <p class="upload-note">После обработки откроется HTML, предпросмотр и список найденных правок.</p>
           </form>
         </section>
         <script>
@@ -185,6 +185,10 @@ def result_page(result: dict[str, object]) -> str:
     removed = report.get("removed_fragments", [])
     added = report.get("added_fragments", [])
     warnings = report.get("warnings", [])
+    removed_count = stats.get("removed_count", 0)
+    added_count = stats.get("added_count", 0)
+    tables_count = stats.get("tables_count", 0)
+    html_length = stats.get("html_length", 0)
     fragment = str(result["fragment"])
     escaped_fragment = html.escape(fragment)
     preview = html.escape(preview_document(fragment), quote=True)
@@ -195,23 +199,24 @@ def result_page(result: dict[str, object]) -> str:
           <div>
             <p class="eyebrow">Готово</p>
             <h1>{html.escape(str(result['original_name']))}</h1>
+            <p class="result-note">HTML подготовлен. Скопируйте его в Bitrix или скачайте файл.</p>
           </div>
           <div class="actions">
+            <button type="button" onclick="copyHtml(this)">Скопировать HTML</button>
             <a class="button secondary" href="/outputs/{html.escape(str(result['output_name']))}" download>Скачать HTML</a>
-            <a class="button secondary" href="/outputs/{html.escape(str(result['report_name']))}" download>Скачать отчет</a>
-            <a class="button" href="/">Новый файл</a>
+            <a class="button ghost" href="/">Новый файл</a>
           </div>
         </section>
-        <section class="stats">
-          <div><b>{stats.get('removed_count', 0)}</b><span>удалено</span></div>
-          <div><b>{stats.get('added_count', 0)}</b><span>добавлено</span></div>
-          <div><b>{stats.get('tables_count', 0)}</b><span>таблиц</span></div>
-          <div><b>{stats.get('html_length', 0)}</b><span>символов HTML</span></div>
+        <section class="stats" aria-label="Статистика обработки">
+          <div><span>Удалено</span><b>{html.escape(str(removed_count))}</b></div>
+          <div><span>Добавлено</span><b>{html.escape(str(added_count))}</b></div>
+          <div><span>Таблиц</span><b>{html.escape(str(tables_count))}</b></div>
+          <div><span>HTML</span><b>{html.escape(str(html_length))} символов</b></div>
         </section>
         {warnings_html(warnings)}
         <section class="split">
           <div class="panel">
-            <div class="panel-title"><h2>HTML для Bitrix</h2><button onclick="copyHtml()">Скопировать</button></div>
+            <div class="panel-title"><h2>HTML для Bitrix</h2><button class="small secondary" onclick="copyHtml(this)">Скопировать</button></div>
             <textarea id="html-output" spellcheck="false" wrap="off">{escaped_fragment}</textarea>
           </div>
           <div class="panel">
@@ -219,20 +224,44 @@ def result_page(result: dict[str, object]) -> str:
             <iframe srcdoc="{preview}"></iframe>
           </div>
         </section>
-        <section class="split small">
-          <div class="panel">
-            <h2>Удаленные красные фрагменты</h2>
-            {items_html(removed)}
-          </div>
-          <div class="panel">
-            <h2>Добавленные желтые фрагменты</h2>
-            {items_html(added)}
-          </div>
-        </section>
+        <details class="details-block">
+          <summary class="details-summary">
+            <span class="details-title">Подробности обработки</span>
+            <small>Удалено: {html.escape(str(removed_count))}, добавлено: {html.escape(str(added_count))}</small>
+          </summary>
+          <section class="split small detail-grid">
+            <div class="panel">
+              <h2>Удаленные красные фрагменты ({html.escape(str(removed_count))})</h2>
+              {items_html(removed)}
+            </div>
+            <div class="panel">
+              <h2>Добавленные фрагменты ({html.escape(str(added_count))})</h2>
+              {items_html(added)}
+            </div>
+          </section>
+        </details>
         <script>
-          async function copyHtml() {{
+          function setCopyState(button, text) {{
+            if (!button) return;
+            const originalText = button.dataset.originalText || button.textContent;
+            button.dataset.originalText = originalText;
+            button.textContent = text;
+            window.clearTimeout(button.copyTimer);
+            button.copyTimer = window.setTimeout(() => {{
+              button.textContent = originalText;
+            }}, 1800);
+          }}
+
+          async function copyHtml(button) {{
             const textarea = document.getElementById('html-output');
-            await navigator.clipboard.writeText(textarea.value);
+            try {{
+              await navigator.clipboard.writeText(textarea.value);
+              setCopyState(button, 'Скопировано');
+            }} catch (error) {{
+              textarea.focus();
+              textarea.select();
+              setCopyState(button, 'Выделено');
+            }}
           }}
         </script>
         """
@@ -257,7 +286,7 @@ def error_page(message: str) -> str:
 def items_html(items: object) -> str:
     if not isinstance(items, list) or not items:
         return '<p class="muted">Нет данных.</p>'
-    return "<ol>" + "".join(f"<li>{html.escape(str(item))}</li>" for item in items[:50]) + "</ol>"
+    return "<ol>" + "".join(f"<li>{html.escape(str(item))}</li>" for item in items) + "</ol>"
 
 
 def warnings_html(items: object) -> str:
@@ -289,7 +318,7 @@ def layout(content: str) -> str:
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>Word в HTML для Bitrix</title>
+      <title>Word в HTML для учебных курсов</title>
       <style>{styles()}</style>
     </head>
     <body>
@@ -305,12 +334,13 @@ def styles() -> str:
     * { box-sizing: border-box; }
     body { margin: 0; background: linear-gradient(135deg, #eef3f8, #f8fbff); color: var(--ink); font-family: Arial, sans-serif; }
     main { width: min(1280px, calc(100% - 32px)); margin: 0 auto; padding: 32px 0; }
-    h1 { margin: 0; font-size: clamp(26px, 4vw, 42px); line-height: 1.05; letter-spacing: -0.03em; }
+    h1 { margin: 0; font-size: clamp(24px, 3.5vw, 38px); line-height: 1.08; letter-spacing: -0.02em; }
     h2 { margin: 0; font-size: 18px; }
     .eyebrow { margin: 0 0 12px; color: var(--accent); font-weight: 700; text-transform: uppercase; letter-spacing: .12em; }
     .lead { max-width: 760px; color: var(--muted); font-size: 20px; line-height: 1.5; margin: 18px 0 0; }
+    .result-note { margin: 12px 0 0; color: var(--muted); font-size: 16px; line-height: 1.45; }
     .hero, .result-head { display: grid; grid-template-columns: 1.2fr .8fr; gap: 24px; align-items: stretch; margin-bottom: 24px; }
-    .upload, .panel, .cards article, .stats div, .warnings { background: rgba(255,255,255,.88); border: 1px solid var(--line); border-radius: 24px; box-shadow: 0 20px 50px rgba(25,42,70,.08); }
+    .upload, .panel, .cards article, .warnings { background: rgba(255,255,255,.88); border: 1px solid var(--line); border-radius: 24px; box-shadow: 0 20px 50px rgba(25,42,70,.08); }
     .intro { display: grid; align-content: center; }
     .rules { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 28px; max-width: 860px; }
     .rule { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.58); }
@@ -334,12 +364,19 @@ def styles() -> str:
     .file-picker-meta { color: var(--muted); font-weight: 400; overflow-wrap: anywhere; }
     button, .button { appearance: none; border: 0; border-radius: 14px; background: var(--accent); color: #fff; padding: 13px 18px; font-weight: 700; text-decoration: none; display: inline-flex; justify-content: center; cursor: pointer; }
     button:hover, .button:hover { background: var(--accent2); }
-    .button.secondary { background: #e6eefb; color: var(--accent2); }
-    .cards, .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
+    button.secondary, .button.secondary { background: #e6eefb; color: var(--accent2); }
+    button.secondary:hover, .button.secondary:hover { background: #d8e6fb; }
+    button.ghost, .button.ghost { background: transparent; color: var(--accent2); border: 1px solid var(--line); }
+    button.ghost:hover, .button.ghost:hover { background: #f7faff; }
+    button.small, .button.small { padding: 9px 12px; border-radius: 12px; font-size: 13px; }
+    .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
     .cards { grid-template-columns: repeat(3, 1fr); }
-    .cards article, .stats div { padding: 20px; }
-    .cards span, .stats span, .muted { color: var(--muted); display: block; margin-top: 8px; }
-    .stats b { font-size: 28px; }
+    .cards article { padding: 20px; }
+    .cards span, .muted { color: var(--muted); display: block; margin-top: 8px; }
+    .stats { display: flex; flex-wrap: wrap; gap: 8px; margin: -8px 0 20px; }
+    .stats div { display: inline-flex; align-items: baseline; gap: 6px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.72); color: var(--muted); }
+    .stats span { font-size: 13px; }
+    .stats b { color: var(--ink); font-size: 14px; }
     .actions { display: flex; align-items: start; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
     .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
     .split.small { align-items: start; }
@@ -352,9 +389,17 @@ def styles() -> str:
     li { margin-bottom: 10px; color: #344054; }
     .warnings { padding: 12px 16px; margin-bottom: 16px; border-color: #f8d486; background: #fff9e8; }
     .warnings p { margin: 6px 0; color: #8a5a00; }
+    .details-block { margin-top: 4px; }
+    .details-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 2px 14px; border-top: 1px solid var(--line); cursor: pointer; }
+    .details-summary::-webkit-details-marker { display: none; }
+    .details-title { font-weight: 700; }
+    .details-title::before { content: "▸"; color: var(--accent); margin-right: 8px; }
+    .details-block[open] .details-title::before { content: "▾"; }
+    .details-summary small { color: var(--muted); font-size: 13px; line-height: 1.35; }
+    .details-block .detail-grid { margin-bottom: 0; }
     .error { grid-template-columns: 1fr; }
     @media (max-width: 980px) { .rules { grid-template-columns: 1fr; } }
-    @media (max-width: 860px) { .hero, .result-head, .split, .cards, .stats { grid-template-columns: 1fr; } .actions { justify-content: flex-start; } textarea, iframe { min-height: 420px; } }
+    @media (max-width: 860px) { .hero, .result-head, .split, .cards { grid-template-columns: 1fr; } .actions { justify-content: flex-start; } textarea, iframe { min-height: 420px; } }
     """
 
 

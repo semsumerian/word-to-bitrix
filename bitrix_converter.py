@@ -1016,7 +1016,7 @@ def clean_for_bitrix(raw_html: str, converter_name: str = "unknown") -> tuple[st
     if not report["removed_fragments"]:
         report["warnings"].append("Фрагменты с красной заливкой не найдены.")
     if not report["added_fragments"]:
-        report["warnings"].append("Желтые фрагменты не найдены.")
+        report["warnings"].append("Добавленные фрагменты не найдены.")
 
     return fragment, report
 
