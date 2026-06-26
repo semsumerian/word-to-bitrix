@@ -404,7 +404,7 @@ def styles() -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run Word -> Bitrix HTML web UI.")
+    parser = argparse.ArgumentParser(description="Run Bitrix course HTML converter web UI.")
     parser.add_argument("--host", default="127.0.0.1", help="Host to bind. Default: 127.0.0.1")
     parser.add_argument("--port", type=int, default=8080, help="Port to bind. Default: 8080")
     args = parser.parse_args()
@@ -414,13 +414,13 @@ def main() -> None:
     try:
         server = ReusableThreadingHTTPServer((args.host, args.port), App)
     except OSError as exc:
-        if exc.errno == 48:
+        if exc.errno in {48, 98, 10048}:
             print(f"Port {args.port} is already in use. Open http://{args.host}:{args.port} if the server is already running, or start another port:")
             print(f"python3 server.py --port {args.port + 1}")
             sys.exit(1)
         raise
 
-    print(f"Word -> Bitrix HTML: http://{args.host}:{args.port}")
+    print(f"Конвертер для Bitrix: http://{args.host}:{args.port}")
     server.serve_forever()
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import html
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -192,11 +193,36 @@ def find_libreoffice() -> str | None:
         shutil.which("libreoffice"),
         "/Applications/LibreOffice.app/Contents/MacOS/soffice",
         str(Path.home() / "Applications/LibreOffice.app/Contents/MacOS/soffice"),
+        *windows_libreoffice_candidates(),
     ]
     for candidate in candidates:
         if candidate and Path(candidate).exists():
             return candidate
     return None
+
+
+def windows_libreoffice_candidates() -> list[str]:
+    roots = []
+    for key in ("PROGRAMFILES", "PROGRAMFILES(X86)"):
+        value = os.environ.get(key)
+        if value:
+            roots.append(Path(value))
+
+    system_drive = os.environ.get("SystemDrive", "C:")
+    roots.extend([
+        Path(system_drive) / "Program Files",
+        Path(system_drive) / "Program Files (x86)",
+    ])
+
+    candidates = []
+    seen = set()
+    for root in roots:
+        path = root / "LibreOffice" / "program" / "soffice.exe"
+        key = str(path).lower()
+        if key not in seen:
+            candidates.append(str(path))
+            seen.add(key)
+    return candidates
 
 
 def convert_with_textutil(input_path: Path, textutil: str) -> str:
