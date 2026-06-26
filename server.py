@@ -131,22 +131,49 @@ def index_page() -> str:
     return layout(
         """
         <section class="hero">
-          <div>
-            <p class="eyebrow">MVP</p>
-            <h1>Word -> Bitrix HTML</h1>
-            <p class="lead">Загрузите .doc или .docx. Инструмент удалит фрагменты с красной заливкой, оставит желтые добавления и подготовит HTML для поля DETAIL_TEXT в Bitrix Learning.</p>
+          <div class="intro">
+            <p class="eyebrow">Конвертер для Bitrix</p>
+            <h1>Word в HTML для Bitrix</h1>
+            <p class="lead">Загрузите .doc или .docx. Инструмент обработает цветовые правки и подготовит HTML для вставки в Bitrix.</p>
+            <div class="rules" aria-label="Правила обработки">
+              <div class="rule">
+                <span class="rule-dot delete"></span>
+                <span><b>Красная заливка</b><small>фрагмент удалится</small></span>
+              </div>
+              <div class="rule">
+                <span class="rule-dot add"></span>
+                <span><b>Желтая и зеленая заливка</b><small>текст останется без подсветки</small></span>
+              </div>
+              <div class="rule">
+                <span class="rule-dot image"></span>
+                <span><b>Изображения</b><small>появятся шаблоны ссылок</small></span>
+              </div>
+            </div>
           </div>
           <form class="upload" method="post" action="/convert" enctype="multipart/form-data">
-            <label>Word-файл</label>
-            <input required type="file" name="file" accept=".doc,.docx,.rtf">
-            <button type="submit">Сконвертировать</button>
+            <div class="upload-heading">
+              <h2>Word-файл</h2>
+              <span>.doc, .docx</span>
+            </div>
+            <label class="file-picker" for="file-input">
+              <input id="file-input" required type="file" name="file" accept=".doc,.docx">
+              <span class="file-picker-main">Выберите файл</span>
+              <span class="file-picker-meta" id="file-name">или перетащите его сюда</span>
+            </label>
+            <button type="submit">Подготовить HTML</button>
+            <p class="upload-note">После обработки откроется HTML, предпросмотр и отчет по правкам.</p>
           </form>
         </section>
-        <section class="cards">
-          <article><b>1. Загрузка</b><span>Берем исходный Word от бизнеса.</span></article>
-          <article><b>2. Очистка</b><span>Красное удаляем, желтое публикуем без подсветки.</span></article>
-          <article><b>3. Экспорт</b><span>Копируем HTML в Bitrix или скачиваем файл.</span></article>
-        </section>
+        <script>
+          const fileInput = document.getElementById('file-input');
+          const fileName = document.getElementById('file-name');
+          if (fileInput && fileName) {
+            fileInput.addEventListener('change', () => {
+              const file = fileInput.files && fileInput.files[0];
+              fileName.textContent = file ? file.name : 'или перетащите его сюда';
+            });
+          }
+        </script>
         """
     )
 
@@ -262,7 +289,7 @@ def layout(content: str) -> str:
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>Word -> Bitrix HTML</title>
+      <title>Word в HTML для Bitrix</title>
       <style>{styles()}</style>
     </head>
     <body>
@@ -278,15 +305,33 @@ def styles() -> str:
     * { box-sizing: border-box; }
     body { margin: 0; background: linear-gradient(135deg, #eef3f8, #f8fbff); color: var(--ink); font-family: Arial, sans-serif; }
     main { width: min(1280px, calc(100% - 32px)); margin: 0 auto; padding: 32px 0; }
-    h1 { margin: 0; font-size: clamp(30px, 5vw, 56px); line-height: .95; letter-spacing: -0.04em; }
+    h1 { margin: 0; font-size: clamp(26px, 4vw, 42px); line-height: 1.05; letter-spacing: -0.03em; }
     h2 { margin: 0; font-size: 18px; }
     .eyebrow { margin: 0 0 12px; color: var(--accent); font-weight: 700; text-transform: uppercase; letter-spacing: .12em; }
-    .lead { max-width: 760px; color: var(--muted); font-size: 20px; line-height: 1.5; }
+    .lead { max-width: 760px; color: var(--muted); font-size: 20px; line-height: 1.5; margin: 18px 0 0; }
     .hero, .result-head { display: grid; grid-template-columns: 1.2fr .8fr; gap: 24px; align-items: stretch; margin-bottom: 24px; }
     .upload, .panel, .cards article, .stats div, .warnings { background: rgba(255,255,255,.88); border: 1px solid var(--line); border-radius: 24px; box-shadow: 0 20px 50px rgba(25,42,70,.08); }
+    .intro { display: grid; align-content: center; }
+    .rules { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 28px; max-width: 860px; }
+    .rule { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.58); }
+    .rule b, .rule small { display: block; }
+    .rule b { font-size: 14px; line-height: 1.25; }
+    .rule small { color: var(--muted); font-size: 13px; line-height: 1.35; margin-top: 3px; }
+    .rule-dot { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 999px; margin-top: 3px; box-shadow: inset 0 0 0 1px rgba(21,32,51,.12); }
+    .rule-dot.delete { background: #f04438; }
+    .rule-dot.add { background: linear-gradient(90deg, #facc15 0 50%, #22c55e 50% 100%); }
+    .rule-dot.image { background: #38bdf8; }
     .upload { padding: 24px; display: grid; align-content: center; gap: 14px; }
+    .upload-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+    .upload-heading span, .upload-note { color: var(--muted); }
+    .upload-note { margin: 0; font-size: 13px; line-height: 1.45; }
     label { font-weight: 700; }
     input[type=file] { width: 100%; padding: 14px; border: 1px dashed #9db0c7; border-radius: 14px; background: #f7faff; }
+    .file-picker { position: relative; display: grid; gap: 6px; padding: 18px; border: 1px dashed #9db0c7; border-radius: 16px; background: #f7faff; cursor: pointer; }
+    .file-picker:hover { border-color: var(--accent); background: #f3f8ff; }
+    .file-picker input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+    .file-picker-main { color: var(--ink); }
+    .file-picker-meta { color: var(--muted); font-weight: 400; overflow-wrap: anywhere; }
     button, .button { appearance: none; border: 0; border-radius: 14px; background: var(--accent); color: #fff; padding: 13px 18px; font-weight: 700; text-decoration: none; display: inline-flex; justify-content: center; cursor: pointer; }
     button:hover, .button:hover { background: var(--accent2); }
     .button.secondary { background: #e6eefb; color: var(--accent2); }
@@ -308,6 +353,7 @@ def styles() -> str:
     .warnings { padding: 12px 16px; margin-bottom: 16px; border-color: #f8d486; background: #fff9e8; }
     .warnings p { margin: 6px 0; color: #8a5a00; }
     .error { grid-template-columns: 1fr; }
+    @media (max-width: 980px) { .rules { grid-template-columns: 1fr; } }
     @media (max-width: 860px) { .hero, .result-head, .split, .cards, .stats { grid-template-columns: 1fr; } .actions { justify-content: flex-start; } textarea, iframe { min-height: 420px; } }
     """
 

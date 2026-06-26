@@ -29,7 +29,7 @@ BLOCKED_FONT_STYLE_KEYS = {
     "mso-style-priority",
     "mso-style-unhide",
 }
-ALLOWED_EXTENSIONS = {".doc", ".docx", ".rtf"}
+ALLOWED_EXTENSIONS = {".doc", ".docx"}
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
