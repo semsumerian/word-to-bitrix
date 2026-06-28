@@ -134,34 +134,19 @@ def index_page() -> str:
           <div class="intro">
             <p class="eyebrow">Конвертер для Bitrix</p>
             <h1>Word в HTML для учебных курсов</h1>
-            <p class="lead">Загрузите .doc или .docx. Инструмент обработает цветовые правки и подготовит HTML для вставки в страницу курса.</p>
-            <div class="rules" aria-label="Правила обработки">
-              <div class="rule">
-                <span class="rule-dot delete"></span>
-                <span><b>Красная заливка</b><small>фрагмент удалится</small></span>
-              </div>
-              <div class="rule">
-                <span class="rule-dot add"></span>
-                <span><b>Желтая и зеленая заливка</b><small>текст останется без подсветки</small></span>
-              </div>
-              <div class="rule">
-                <span class="rule-dot image"></span>
-                <span><b>Изображения</b><small>появятся шаблоны ссылок</small></span>
-              </div>
-            </div>
+            <p class="lead">Один файл Word на входе, чистый HTML для Bitrix на выходе. Цветовые правки обработаются автоматически.</p>
           </div>
           <form class="upload" method="post" action="/convert" enctype="multipart/form-data">
             <div class="upload-heading">
-              <h2>Word-файл</h2>
+              <h2>Загрузка документа</h2>
               <span>.doc, .docx</span>
             </div>
             <label class="file-picker" for="file-input">
               <input id="file-input" required type="file" name="file" accept=".doc,.docx">
-              <span class="file-picker-main">Выберите файл</span>
-              <span class="file-picker-meta" id="file-name">или перетащите его сюда</span>
+              <span class="file-picker-main">Выберите Word-файл</span>
+              <span class="file-picker-meta" id="file-name">или перетащите .doc/.docx сюда</span>
             </label>
             <button type="submit">Подготовить HTML</button>
-            <p class="upload-note">После обработки откроется HTML, предпросмотр и список найденных правок.</p>
           </form>
         </section>
         <script>
@@ -170,11 +155,12 @@ def index_page() -> str:
           if (fileInput && fileName) {
             fileInput.addEventListener('change', () => {
               const file = fileInput.files && fileInput.files[0];
-              fileName.textContent = file ? file.name : 'или перетащите его сюда';
+              fileName.textContent = file ? file.name : 'или перетащите .doc/.docx сюда';
             });
           }
         </script>
-        """
+        """,
+        page_class="home",
     )
 
 
@@ -214,13 +200,32 @@ def result_page(result: dict[str, object]) -> str:
           <div><span>HTML</span><b>{html.escape(str(html_length))} символов</b></div>
         </section>
         {warnings_html(warnings)}
-        <section class="split">
-          <div class="panel">
-            <div class="panel-title"><h2>HTML для Bitrix</h2><button class="small secondary" onclick="copyHtml(this)">Скопировать</button></div>
+        <section class="workspace-toolbar" aria-label="Режим просмотра">
+          <div class="segmented" role="group" aria-label="Режим просмотра блоков">
+            <button type="button" class="active" data-view-mode="split" aria-pressed="true">Рядом</button>
+            <button type="button" data-view-mode="html" aria-pressed="false">HTML</button>
+            <button type="button" data-view-mode="preview" aria-pressed="false">Предпросмотр</button>
+          </div>
+        </section>
+        <section class="split workspace" id="workspace" data-view-mode="split">
+          <div class="panel html-panel">
+            <div class="panel-title">
+              <h2>HTML</h2>
+              <div class="panel-actions">
+                <button type="button" class="small secondary" onclick="copyHtml(this)">Скопировать</button>
+                <button type="button" class="small ghost" id="wrap-toggle" aria-pressed="false">Перенос строк</button>
+                <button type="button" class="small ghost" data-expand-panel="html" aria-pressed="false">Развернуть</button>
+              </div>
+            </div>
             <textarea id="html-output" spellcheck="false" wrap="off">{escaped_fragment}</textarea>
           </div>
-          <div class="panel">
-            <div class="panel-title"><h2>Предпросмотр</h2></div>
+          <div class="panel preview-panel">
+            <div class="panel-title">
+              <h2>Предпросмотр</h2>
+              <div class="panel-actions">
+                <button type="button" class="small ghost" data-expand-panel="preview" aria-pressed="false">Развернуть</button>
+              </div>
+            </div>
             <iframe srcdoc="{preview}"></iframe>
           </div>
         </section>
@@ -231,7 +236,7 @@ def result_page(result: dict[str, object]) -> str:
           </summary>
           <section class="split small detail-grid">
             <div class="panel">
-              <h2>Удаленные красные фрагменты ({html.escape(str(removed_count))})</h2>
+              <h2>Удаленные фрагменты ({html.escape(str(removed_count))})</h2>
               {items_html(removed)}
             </div>
             <div class="panel">
@@ -262,6 +267,50 @@ def result_page(result: dict[str, object]) -> str:
               textarea.select();
               setCopyState(button, 'Выделено');
             }}
+          }}
+
+          const workspace = document.getElementById('workspace');
+          const modeButtons = document.querySelectorAll('.segmented [data-view-mode]');
+          const expandButtons = document.querySelectorAll('[data-expand-panel]');
+          const wrapButton = document.getElementById('wrap-toggle');
+          const htmlOutput = document.getElementById('html-output');
+
+          function setViewMode(mode) {{
+            if (!workspace) return;
+            workspace.dataset.viewMode = mode;
+            modeButtons.forEach((button) => {{
+              const active = button.dataset.viewMode === mode;
+              button.classList.toggle('active', active);
+              button.setAttribute('aria-pressed', String(active));
+            }});
+            expandButtons.forEach((button) => {{
+              const active = button.dataset.expandPanel === mode;
+              button.classList.toggle('active', active);
+              button.textContent = active ? 'Свернуть' : 'Развернуть';
+              button.setAttribute('aria-pressed', String(active));
+            }});
+          }}
+
+          modeButtons.forEach((button) => {{
+            button.addEventListener('click', () => setViewMode(button.dataset.viewMode));
+          }});
+
+          expandButtons.forEach((button) => {{
+            button.addEventListener('click', () => {{
+              const panel = button.dataset.expandPanel;
+              setViewMode(workspace && workspace.dataset.viewMode === panel ? 'split' : panel);
+            }});
+          }});
+
+          if (wrapButton && htmlOutput) {{
+            wrapButton.addEventListener('click', () => {{
+              const wrapped = !htmlOutput.classList.contains('is-wrapped');
+              htmlOutput.classList.toggle('is-wrapped', wrapped);
+              htmlOutput.setAttribute('wrap', wrapped ? 'soft' : 'off');
+              wrapButton.classList.toggle('active', wrapped);
+              wrapButton.textContent = wrapped ? 'Без переноса' : 'Перенос строк';
+              wrapButton.setAttribute('aria-pressed', String(wrapped));
+            }});
           }}
         </script>
         """
@@ -311,7 +360,8 @@ def preview_document(fragment: str) -> str:
     """
 
 
-def layout(content: str) -> str:
+def layout(content: str, page_class: str = "") -> str:
+    body_class = f' class="{html.escape(page_class, quote=True)}"' if page_class else ""
     return f"""
     <!doctype html>
     <html lang="ru">
@@ -321,7 +371,7 @@ def layout(content: str) -> str:
       <title>Word в HTML для учебных курсов</title>
       <style>{styles()}</style>
     </head>
-    <body>
+    <body{body_class}>
       <main>{content}</main>
     </body>
     </html>
@@ -332,29 +382,20 @@ def styles() -> str:
     return """
     :root { color-scheme: light; --bg: #eef3f8; --ink: #152033; --muted: #667085; --card: #ffffff; --line: #d8e0ea; --accent: #185adb; --accent2: #0f3f9f; }
     * { box-sizing: border-box; }
-    body { margin: 0; background: linear-gradient(135deg, #eef3f8, #f8fbff); color: var(--ink); font-family: Arial, sans-serif; }
+    html { min-height: 100%; }
+    body { min-height: 100%; margin: 0; background: linear-gradient(135deg, #f3f7fb, #eef7f3 52%, #f8fbff); color: var(--ink); font-family: Arial, sans-serif; }
     main { width: min(1280px, calc(100% - 32px)); margin: 0 auto; padding: 32px 0; }
-    h1 { margin: 0; font-size: clamp(24px, 3.5vw, 38px); line-height: 1.08; letter-spacing: -0.02em; }
+    h1 { margin: 0; font-size: 38px; line-height: 1.08; letter-spacing: 0; }
     h2 { margin: 0; font-size: 18px; }
-    .eyebrow { margin: 0 0 12px; color: var(--accent); font-weight: 700; text-transform: uppercase; letter-spacing: .12em; }
+    .eyebrow { margin: 0 0 12px; color: var(--accent); font-weight: 700; text-transform: uppercase; letter-spacing: 0; }
     .lead { max-width: 760px; color: var(--muted); font-size: 20px; line-height: 1.5; margin: 18px 0 0; }
     .result-note { margin: 12px 0 0; color: var(--muted); font-size: 16px; line-height: 1.45; }
     .hero, .result-head { display: grid; grid-template-columns: 1.2fr .8fr; gap: 24px; align-items: stretch; margin-bottom: 24px; }
     .upload, .panel, .cards article, .warnings { background: rgba(255,255,255,.88); border: 1px solid var(--line); border-radius: 24px; box-shadow: 0 20px 50px rgba(25,42,70,.08); }
     .intro { display: grid; align-content: center; }
-    .rules { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 28px; max-width: 860px; }
-    .rule { display: flex; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255,255,255,.58); }
-    .rule b, .rule small { display: block; }
-    .rule b { font-size: 14px; line-height: 1.25; }
-    .rule small { color: var(--muted); font-size: 13px; line-height: 1.35; margin-top: 3px; }
-    .rule-dot { flex: 0 0 auto; width: 12px; height: 12px; border-radius: 999px; margin-top: 3px; box-shadow: inset 0 0 0 1px rgba(21,32,51,.12); }
-    .rule-dot.delete { background: #f04438; }
-    .rule-dot.add { background: linear-gradient(90deg, #facc15 0 50%, #22c55e 50% 100%); }
-    .rule-dot.image { background: #38bdf8; }
     .upload { padding: 24px; display: grid; align-content: center; gap: 14px; }
     .upload-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-    .upload-heading span, .upload-note { color: var(--muted); }
-    .upload-note { margin: 0; font-size: 13px; line-height: 1.45; }
+    .upload-heading span { color: var(--muted); }
     label { font-weight: 700; }
     input[type=file] { width: 100%; padding: 14px; border: 1px dashed #9db0c7; border-radius: 14px; background: #f7faff; }
     .file-picker { position: relative; display: grid; gap: 6px; padding: 18px; border: 1px dashed #9db0c7; border-radius: 16px; background: #f7faff; cursor: pointer; }
@@ -368,6 +409,7 @@ def styles() -> str:
     button.secondary:hover, .button.secondary:hover { background: #d8e6fb; }
     button.ghost, .button.ghost { background: transparent; color: var(--accent2); border: 1px solid var(--line); }
     button.ghost:hover, .button.ghost:hover { background: #f7faff; }
+    button.ghost.active { background: #e6eefb; border-color: #c7d7ef; color: var(--accent2); }
     button.small, .button.small { padding: 9px 12px; border-radius: 12px; font-size: 13px; }
     .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px; }
     .cards { grid-template-columns: repeat(3, 1fr); }
@@ -378,12 +420,22 @@ def styles() -> str:
     .stats span { font-size: 13px; }
     .stats b { color: var(--ink); font-size: 14px; }
     .actions { display: flex; align-items: start; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
+    .workspace-toolbar { display: flex; justify-content: flex-start; margin: 0 0 12px; }
+    .segmented { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.72); }
+    .segmented button { min-height: 34px; padding: 8px 12px; border-radius: 6px; background: transparent; color: var(--muted); font-size: 13px; }
+    .segmented button:hover { background: rgba(255,255,255,.9); color: var(--accent2); }
+    .segmented button.active { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(25,42,70,.10); }
     .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
     .split.small { align-items: start; }
+    .workspace[data-view-mode="html"], .workspace[data-view-mode="preview"] { grid-template-columns: 1fr; }
+    .workspace[data-view-mode="html"] .preview-panel, .workspace[data-view-mode="preview"] .html-panel { display: none; }
+    .workspace[data-view-mode="html"] textarea, .workspace[data-view-mode="preview"] iframe { min-height: 720px; }
     .panel { overflow: hidden; }
     .panel-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px; border-bottom: 1px solid var(--line); }
+    .panel-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
     .panel > h2 { padding: 16px 16px 0; }
     textarea { width: 100%; min-height: 620px; border: 0; padding: 16px; resize: vertical; font-family: Menlo, Consolas, monospace; font-size: 13px; line-height: 1.45; outline: none; tab-size: 2; white-space: pre; overflow: auto; }
+    textarea.is-wrapped { white-space: pre-wrap; overflow-wrap: anywhere; }
     iframe { width: 100%; min-height: 620px; border: 0; background: #fff; }
     ol { margin: 0; padding: 16px 16px 16px 38px; max-height: 360px; overflow: auto; }
     li { margin-bottom: 10px; color: #344054; }
@@ -398,8 +450,20 @@ def styles() -> str:
     .details-summary small { color: var(--muted); font-size: 13px; line-height: 1.35; }
     .details-block .detail-grid { margin-bottom: 0; }
     .error { grid-template-columns: 1fr; }
-    @media (max-width: 980px) { .rules { grid-template-columns: 1fr; } }
-    @media (max-width: 860px) { .hero, .result-head, .split, .cards { grid-template-columns: 1fr; } .actions { justify-content: flex-start; } textarea, iframe { min-height: 420px; } }
+    body.home main { display: grid; align-items: center; width: min(960px, calc(100% - 40px)); min-height: 100dvh; padding: clamp(28px, 6vh, 64px) 0; }
+    body.home .hero { grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); align-items: center; gap: 48px; margin-bottom: 0; }
+    body.home .intro { align-content: center; }
+    body.home .intro h1 { max-width: 560px; font-size: 48px; line-height: 1.03; }
+    body.home .lead { max-width: 520px; font-size: 18px; line-height: 1.55; }
+    body.home .upload { align-content: start; gap: 18px; min-height: 336px; padding: 28px; border-radius: 8px; background: rgba(255,255,255,.94); box-shadow: 0 24px 64px rgba(25,42,70,.10); }
+    body.home .upload-heading { padding-bottom: 2px; }
+    body.home .file-picker { min-height: 164px; place-content: center; gap: 8px; padding: 24px; text-align: center; border-radius: 8px; background: #f8fbff; }
+    body.home .file-picker-main { color: var(--accent2); font-size: 17px; }
+    body.home .file-picker-meta { font-size: 14px; }
+    body.home .upload button { align-items: center; width: 100%; min-height: 50px; border-radius: 8px; font-size: 15px; }
+    @media (max-width: 860px) { .hero, .result-head, .split, .cards { grid-template-columns: 1fr; } .actions { justify-content: flex-start; } .segmented { width: 100%; } .segmented button { flex: 1 1 0; } .panel-title { align-items: flex-start; flex-direction: column; } .panel-actions { justify-content: flex-start; width: 100%; } textarea, iframe, .workspace[data-view-mode="html"] textarea, .workspace[data-view-mode="preview"] iframe { min-height: 520px; } }
+    @media (max-width: 860px) { body.home main { align-items: center; width: min(640px, calc(100% - 32px)); min-height: 100dvh; padding: 32px 0; } body.home .hero { grid-template-columns: 1fr; gap: 18px; } body.home .intro h1 { font-size: 40px; } body.home .lead { font-size: 16px; } body.home .upload { min-height: 0; padding: 20px; } body.home .file-picker { min-height: 132px; } }
+    @media (max-width: 420px) { body.home .intro h1 { font-size: 34px; } h1 { font-size: 32px; } }
     """
 
 
