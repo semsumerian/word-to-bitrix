@@ -200,13 +200,6 @@ def result_page(result: dict[str, object]) -> str:
           <div><span>HTML</span><b>{html.escape(str(html_length))} символов</b></div>
         </section>
         {warnings_html(warnings)}
-        <section class="workspace-toolbar" aria-label="Режим просмотра">
-          <div class="segmented" role="group" aria-label="Режим просмотра блоков">
-            <button type="button" class="active" data-view-mode="split" aria-pressed="true">Рядом</button>
-            <button type="button" data-view-mode="html" aria-pressed="false">HTML</button>
-            <button type="button" data-view-mode="preview" aria-pressed="false">Предпросмотр</button>
-          </div>
-        </section>
         <section class="split workspace" id="workspace" data-view-mode="split">
           <div class="panel html-panel">
             <div class="panel-title">
@@ -270,7 +263,6 @@ def result_page(result: dict[str, object]) -> str:
           }}
 
           const workspace = document.getElementById('workspace');
-          const modeButtons = document.querySelectorAll('.segmented [data-view-mode]');
           const expandButtons = document.querySelectorAll('[data-expand-panel]');
           const wrapButton = document.getElementById('wrap-toggle');
           const htmlOutput = document.getElementById('html-output');
@@ -278,11 +270,6 @@ def result_page(result: dict[str, object]) -> str:
           function setViewMode(mode) {{
             if (!workspace) return;
             workspace.dataset.viewMode = mode;
-            modeButtons.forEach((button) => {{
-              const active = button.dataset.viewMode === mode;
-              button.classList.toggle('active', active);
-              button.setAttribute('aria-pressed', String(active));
-            }});
             expandButtons.forEach((button) => {{
               const active = button.dataset.expandPanel === mode;
               button.classList.toggle('active', active);
@@ -290,10 +277,6 @@ def result_page(result: dict[str, object]) -> str:
               button.setAttribute('aria-pressed', String(active));
             }});
           }}
-
-          modeButtons.forEach((button) => {{
-            button.addEventListener('click', () => setViewMode(button.dataset.viewMode));
-          }});
 
           expandButtons.forEach((button) => {{
             button.addEventListener('click', () => {{
@@ -420,11 +403,6 @@ def styles() -> str:
     .stats span { font-size: 13px; }
     .stats b { color: var(--ink); font-size: 14px; }
     .actions { display: flex; align-items: start; justify-content: flex-end; gap: 10px; flex-wrap: wrap; }
-    .workspace-toolbar { display: flex; justify-content: flex-start; margin: 0 0 12px; }
-    .segmented { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: rgba(255,255,255,.72); }
-    .segmented button { min-height: 34px; padding: 8px 12px; border-radius: 6px; background: transparent; color: var(--muted); font-size: 13px; }
-    .segmented button:hover { background: rgba(255,255,255,.9); color: var(--accent2); }
-    .segmented button.active { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(25,42,70,.10); }
     .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
     .split.small { align-items: start; }
     .workspace[data-view-mode="html"], .workspace[data-view-mode="preview"] { grid-template-columns: 1fr; }
@@ -461,7 +439,7 @@ def styles() -> str:
     body.home .file-picker-main { color: var(--accent2); font-size: 17px; }
     body.home .file-picker-meta { font-size: 14px; }
     body.home .upload button { align-items: center; width: 100%; min-height: 50px; border-radius: 8px; font-size: 15px; }
-    @media (max-width: 860px) { .hero, .result-head, .split, .cards { grid-template-columns: 1fr; } .actions { justify-content: flex-start; } .segmented { width: 100%; } .segmented button { flex: 1 1 0; } .panel-title { align-items: flex-start; flex-direction: column; } .panel-actions { justify-content: flex-start; width: 100%; } textarea, iframe, .workspace[data-view-mode="html"] textarea, .workspace[data-view-mode="preview"] iframe { min-height: 520px; } }
+    @media (max-width: 860px) { .hero, .result-head, .split, .cards { grid-template-columns: 1fr; } .actions { justify-content: flex-start; } .panel-title { align-items: flex-start; flex-direction: column; } .panel-actions { justify-content: flex-start; width: 100%; } textarea, iframe, .workspace[data-view-mode="html"] textarea, .workspace[data-view-mode="preview"] iframe { min-height: 520px; } }
     @media (max-width: 860px) { body.home main { align-items: center; width: min(640px, calc(100% - 32px)); min-height: 100dvh; padding: 32px 0; } body.home .hero { grid-template-columns: 1fr; gap: 18px; } body.home .intro h1 { font-size: 40px; } body.home .lead { font-size: 16px; } body.home .upload { min-height: 0; padding: 20px; } body.home .file-picker { min-height: 132px; } }
     @media (max-width: 420px) { body.home .intro h1 { font-size: 34px; } h1 { font-size: 32px; } }
     """
