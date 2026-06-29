@@ -32,6 +32,7 @@ launchers/windows/start-converter.ps1
 - LibreOffice в стандартной папке `C:\Program Files\LibreOffice`.
 
 Обычно достаточно запускать `start-converter.bat` двойным кликом.
+BAT-файл запускает общий Python-лаунчер по абсолютному пути и пробует сначала `py -3`, затем `python`.
 
 ## Что делает запускатель
 
